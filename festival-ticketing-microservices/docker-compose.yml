@@ -1,0 +1,317 @@
+﻿name: festival-ticketing
+
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-CU20-ubuntu-22.04
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-ChangeThis_StrongPassword123!}
+    ports:
+      - "1433:1433"
+    volumes:
+      - mssql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", '/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q "SELECT 1" || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  mssql-init:
+    image: mcr.microsoft.com/mssql/server:2022-CU20-ubuntu-22.04
+    depends_on:
+      mssql:
+        condition: service_healthy
+    environment:
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-ChangeThis_StrongPassword123!}
+    volumes:
+      - ./database/mssql/init.sql:/init.sql:ro
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        /opt/mssql-tools18/bin/sqlcmd -S mssql,1433 -U sa -P "$$MSSQL_SA_PASSWORD" -C -i /init.sql
+    restart: "no"
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ticketdb
+      POSTGRES_USER: festival
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-festivalpass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U festival -d ticketdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: userdb
+      MYSQL_USER: festival
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-festivalpass}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpass}
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    restart: unless-stopped
+
+  mongodb:
+    image: mongo:8.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: festival
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-festivalpass}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:4.2-management-alpine
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: festival
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-festivalpass}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: [ "CMD", "rabbitmq-diagnostics", "-q", "ping" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  service-discovery:
+    build:
+      context: .
+      dockerfile: service-discovery/Dockerfile
+    image: festival/service-discovery:1.0.0
+    ports:
+      - "8761:8761"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8761/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    image: festival/api-gateway:1.0.0
+    environment:
+      EUREKA_URL: http://service-discovery:8761/eureka/
+    ports:
+      - "8090:8080"
+    depends_on:
+      service-discovery:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  event-service:
+    build:
+      context: .
+      dockerfile: event-service/Dockerfile
+    image: festival/event-service:1.0.0
+    environment:
+      EUREKA_URL: http://service-discovery:8761/eureka/
+      DB_URL: "jdbc:sqlserver://mssql:1433;databaseName=festivaldb;encrypt=true;trustServerCertificate=true"
+      DB_USERNAME: sa
+      DB_PASSWORD: ${MSSQL_SA_PASSWORD:-ChangeThis_StrongPassword123!}
+    ports:
+      - "8081:8081"
+    depends_on:
+      service-discovery:
+        condition: service_healthy
+      mssql-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  user-service:
+    build:
+      context: .
+      dockerfile: user-service/Dockerfile
+    image: festival/user-service:1.0.0
+    environment:
+      EUREKA_URL: http://service-discovery:8761/eureka/
+      DB_URL: jdbc:mysql://mysql:3306/userdb?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      DB_USERNAME: festival
+      DB_PASSWORD: ${MYSQL_PASSWORD:-festivalpass}
+    ports:
+      - "8083:8083"
+    depends_on:
+      service-discovery:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8083/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: payment-service/Dockerfile
+    image: festival/payment-service:1.0.0
+    environment:
+      EUREKA_URL: http://service-discovery:8761/eureka/
+      MONGODB_URI: mongodb://festival:${MONGO_ROOT_PASSWORD:-festivalpass}@mongodb:27017/paymentdb?authSource=admin
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USERNAME: festival
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-festivalpass}
+    ports:
+      - "8084:8084"
+    depends_on:
+      service-discovery:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8084/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: notification-service/Dockerfile
+    image: festival/notification-service:1.0.0
+    environment:
+      EUREKA_URL: http://service-discovery:8761/eureka/
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USERNAME: festival
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-festivalpass}
+    ports:
+      - "8085:8085"
+    depends_on:
+      service-discovery:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8085/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  ticket-service:
+    build:
+      context: .
+      dockerfile: ticket-service/Dockerfile
+    image: festival/ticket-service:1.0.0
+    environment:
+      EUREKA_URL: http://service-discovery:8761/eureka/
+      DB_URL: jdbc:postgresql://postgres:5432/ticketdb
+      DB_USERNAME: festival
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-festivalpass}
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USERNAME: festival
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:-festivalpass}
+    ports:
+      - "8082:8082"
+    depends_on:
+      service-discovery:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      event-service:
+        condition: service_healthy
+      user-service:
+        condition: service_healthy
+      payment-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/actuator/health | grep -q UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.path=/prometheus"]
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  mssql-data:
+  postgres-data:
+  mysql-data:
+  mongo-data:
+  rabbitmq-data:
+  prometheus-data:
+  grafana-data:
+

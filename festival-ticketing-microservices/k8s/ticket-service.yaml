@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ticket-service
+  namespace: festival-system
+  labels:
+    app: ticket-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ticket-service
+  template:
+    metadata:
+      labels:
+        app: ticket-service
+    spec:
+      containers:
+        - name: ticket-service
+          image: ghcr.io/replace-me/festival-ticket-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8082
+          env:
+            - {name: EUREKA_URL, value: "http://service-discovery:8761/eureka/"}
+            - {name: DB_URL, value: "jdbc:postgresql://postgres:5432/ticketdb"}
+            - {name: DB_USERNAME, value: festival}
+            - name: DB_PASSWORD
+              valueFrom: {secretKeyRef: {name: festival-secrets, key: postgres-password}}
+            - {name: RABBITMQ_HOST, value: rabbitmq}
+            - {name: RABBITMQ_USERNAME, value: festival}
+            - name: RABBITMQ_PASSWORD
+              valueFrom: {secretKeyRef: {name: festival-secrets, key: rabbitmq-password}}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: 45
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ticket-service
+  namespace: festival-system
+spec:
+  selector:
+    app: ticket-service
+  ports:
+    - name: http
+      port: 8082
+      targetPort: http
+  type: ClusterIP

@@ -1,0 +1,45 @@
+server:
+  port: ${SERVER_PORT:8084}
+
+spring:
+  application:
+    name: payment-service
+
+  mongodb:
+    uri: ${MONGODB_URI:mongodb://festival:festivalpass@localhost:27017/paymentdb?authSource=admin}
+
+  data:
+    mongodb:
+      auto-index-creation: true
+      representation:
+        big-decimal: decimal128
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:festival}
+    password: ${RABBITMQ_PASSWORD:festivalpass}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_URL:http://localhost:8761/eureka/}
+  instance:
+    prefer-ip-address: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}

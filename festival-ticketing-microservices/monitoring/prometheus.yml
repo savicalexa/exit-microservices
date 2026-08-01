@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: festival-services
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets:
+          - service-discovery:8761
+          - api-gateway:8080
+          - event-service:8081
+          - ticket-service:8082
+          - user-service:8083
+          - payment-service:8084
+          - notification-service:8085

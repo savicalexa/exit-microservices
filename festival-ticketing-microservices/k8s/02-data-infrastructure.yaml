@@ -1,0 +1,155 @@
+# Basic single-replica data stores for demonstration. Use managed databases or
+# StatefulSets with encrypted persistent volumes for a real production cluster.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mssql
+  namespace: festival-system
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: mssql}}
+  template:
+    metadata: {labels: {app: mssql}}
+    spec:
+      containers:
+        - name: mssql
+          image: mcr.microsoft.com/mssql/server:2022-CU20-ubuntu-22.04
+          ports: [{name: db, containerPort: 1433}]
+          env:
+            - {name: ACCEPT_EULA, value: "Y"}
+            - {name: MSSQL_PID, value: Developer}
+            - name: MSSQL_SA_PASSWORD
+              valueFrom: {secretKeyRef: {name: festival-secrets, key: mssql-sa-password}}
+          volumeMounts: [{name: data, mountPath: /var/opt/mssql}]
+          readinessProbe: {tcpSocket: {port: db}, initialDelaySeconds: 30, periodSeconds: 10}
+          resources:
+            requests: {cpu: 500m, memory: 2Gi}
+            limits: {cpu: "2", memory: 4Gi}
+      volumes: [{name: data, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mssql, namespace: festival-system}
+spec:
+  selector: {app: mssql}
+  ports: [{name: db, port: 1433, targetPort: db}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: postgres, namespace: festival-system}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: postgres}}
+  template:
+    metadata: {labels: {app: postgres}}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          ports: [{name: db, containerPort: 5432}]
+          env:
+            - {name: POSTGRES_DB, value: ticketdb}
+            - {name: POSTGRES_USER, value: festival}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: festival-secrets, key: postgres-password}}
+          volumeMounts: [{name: data, mountPath: /var/lib/postgresql/data}]
+          readinessProbe: {tcpSocket: {port: db}, initialDelaySeconds: 10, periodSeconds: 5}
+      volumes: [{name: data, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: postgres, namespace: festival-system}
+spec:
+  selector: {app: postgres}
+  ports: [{name: db, port: 5432, targetPort: db}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: mysql, namespace: festival-system}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: mysql}}
+  template:
+    metadata: {labels: {app: mysql}}
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.4
+          ports: [{name: db, containerPort: 3306}]
+          env:
+            - {name: MYSQL_DATABASE, value: userdb}
+            - {name: MYSQL_USER, value: festival}
+            - name: MYSQL_PASSWORD
+              valueFrom: {secretKeyRef: {name: festival-secrets, key: mysql-password}}
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: festival-secrets, key: mysql-root-password}}
+          volumeMounts: [{name: data, mountPath: /var/lib/mysql}]
+          readinessProbe: {tcpSocket: {port: db}, initialDelaySeconds: 20, periodSeconds: 5}
+      volumes: [{name: data, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mysql, namespace: festival-system}
+spec:
+  selector: {app: mysql}
+  ports: [{name: db, port: 3306, targetPort: db}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: mongodb, namespace: festival-system}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: mongodb}}
+  template:
+    metadata: {labels: {app: mongodb}}
+    spec:
+      containers:
+        - name: mongodb
+          image: mongo:8.0
+          ports: [{name: db, containerPort: 27017}]
+          env:
+            - {name: MONGO_INITDB_ROOT_USERNAME, value: festival}
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom: {secretKeyRef: {name: festival-secrets, key: mongo-password}}
+          volumeMounts: [{name: data, mountPath: /data/db}]
+          readinessProbe: {tcpSocket: {port: db}, initialDelaySeconds: 10, periodSeconds: 5}
+      volumes: [{name: data, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: mongodb, namespace: festival-system}
+spec:
+  selector: {app: mongodb}
+  ports: [{name: db, port: 27017, targetPort: db}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: rabbitmq, namespace: festival-system}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: rabbitmq}}
+  template:
+    metadata: {labels: {app: rabbitmq}}
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:4.2-management-alpine
+          ports:
+            - {name: amqp, containerPort: 5672}
+            - {name: management, containerPort: 15672}
+          env:
+            - {name: RABBITMQ_DEFAULT_USER, value: festival}
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom: {secretKeyRef: {name: festival-secrets, key: rabbitmq-password}}
+          volumeMounts: [{name: data, mountPath: /var/lib/rabbitmq}]
+          readinessProbe: {tcpSocket: {port: amqp}, initialDelaySeconds: 10, periodSeconds: 5}
+      volumes: [{name: data, emptyDir: {}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: rabbitmq, namespace: festival-system}
+spec:
+  selector: {app: rabbitmq}
+  ports:
+    - {name: amqp, port: 5672, targetPort: amqp}
+    - {name: management, port: 15672, targetPort: management}
